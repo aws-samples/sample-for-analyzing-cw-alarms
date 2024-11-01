@@ -164,3 +164,27 @@ if __name__ == "__main__":
     metrics_alarm_list, composit_alarms_list = retrieve_all_cw_alarms(
         cw_client
     )
+
+    (
+        metrics_alarms_without_description,
+        metrics_alarms_with_too_high_threshold,
+        metrics_alarms_with_too_high_data_points,
+        metrics_alarms_without_actions,
+    ) = basic_alarm_checks(metrics_alarm_list)
+
+    logging.info(
+        f"""Number of Alarms Missing Descriptions:
+        {len(metrics_alarms_without_description)}"""
+    )
+    logging.info(
+        f"""Number of Alarms With High Thresholds:
+        {len(metrics_alarms_with_too_high_threshold)}"""
+    )
+    logging.info(
+        f"""Number of Alarms High Data Points:
+        {len(metrics_alarms_with_too_high_data_points)}"""
+    )
+    logging.info(
+        f"""Number of Alarms Without Actions:
+        {len(metrics_alarms_without_actions)}"""
+    )
