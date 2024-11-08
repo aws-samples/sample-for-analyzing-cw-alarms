@@ -1,3 +1,5 @@
+import datetime
+import json
 import logging
 import os
 
@@ -170,18 +172,81 @@ def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
     return response["AlarmHistoryItems"]
 
 
-def check_alarm_history(alarm_history: dict) -> bool:
-    """
-    Checks the history of an alarm to determine if the alarm fails any criteria
+# def check_alarm_history(alarm_history: dict) -> bool:
+#     """
+#     Checks the history of an alarm to determine if the alarm fails any criteria
 
-    Args:
-        alarm (dict): A CloudWatch alarm dict object
+#     Args:
+#         alarm (dict): A CloudWatch alarm dict object
 
-    Returns:
-        bool: True if the alarm has been triggered, False otherwise
-    """
+#     Returns:
+#         TODO: Fill out return value
+#     """
 
-    return True
+#     for alarm in alarm_history:
+#         if alarm["HistoryItemType"] != "StateUpdate":
+#             continue  # We only care about Status Updates
+
+#         if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
+#             # TODO: Check if alarm was triggered within the last 12 hours
+
+#             last_alarm_hist = json.loads(alarm["HistoryData"])
+#             last_alarm_start_time_string = last_alarm_hist["newState"][
+#                 "stateReasonData"
+#             ]["startDate"]
+#             last_alarm_start_time = datetime.datetime.strptime(
+#                 last_alarm_start_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
+#             )
+
+#             alarm_hist = json.loads(alarm["HistoryData"])
+#             alarm_start_time_string = last_alarm_hist["newState"][
+#                 "stateReasonData"
+#             ]["startDate"]
+
+#             alarm_start_time = datetime.datetime.strptime(
+#                 alarm_start_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
+#             )
+
+#             retrigger_time = alarm_start_time - last_alarm_start_time
+#             if retrigger_time < datetime.timedelta(hours=12):
+#                 recurring_alarm_count += 1
+
+#         elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
+#             # TODO: Check if alarm was triggered within the last 2 minutes
+#             if (
+#                 len(alarm_stack) == 0
+#             ):  # TODO: remove this when grabbing FULL history (catches case where pagination happens on active alarm)
+#                 continue
+#             alarm_trigger = alarm_stack.pop()
+#             alarm_hist = json.loads(alarm["HistoryData"])
+#             alarm_trigger_hist = json.loads(alarm_trigger["HistoryData"])
+
+#             # Sanity check something hasn't been missed by comparing state changes
+#             if alarm_hist["newState"] != alarm_trigger_hist["oldState"]:
+#                 print(
+#                     "Error: Alarm cannot be triggered twice without being resolved."
+#                 )
+#                 break
+
+#             alarm_time_string = alarm_trigger_hist["newState"][
+#                 "stateReasonData"
+#             ]["startDate"]
+#             alarm_time = datetime.datetime.strptime(
+#                 alarm_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
+#             )
+
+#             ok_time_string = alarm_hist["newState"]["stateReasonData"][
+#                 "startDate"
+#             ]
+#             ok_time = datetime.datetime.strptime(
+#                 ok_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
+#             )
+
+#             time_to_solve = ok_time - alarm_time
+#             if time_to_solve < datetime.timedelta(minutes=2):
+#                 short_alarm_count += 1
+
+#     return True
 
 
 if __name__ == "__main__":
