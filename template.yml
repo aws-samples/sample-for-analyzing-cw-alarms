@@ -1,0 +1,477 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Resources required for the CludWatch alarm evaluator'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: 'dev'
+  S3BucketName:
+    Type: String
+    Description: 'S3 bucket containing source code'
+  S3SourceFile:
+    Type: String
+    Description: 'Path to source file in S3'
+
+Resources:
+  # VPC and Network Resources
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-alarm-evaluator-repo
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ECS Cluster and Related Resources
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-alarm-evaluator-cluster
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-alarm-evaluator-task-exec-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-alarm-evaluator-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+              ArnLike:
+                'aws:SourceArn': !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: AlarmEvaluatorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarmHistory
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DescribeAlarmsForMetric
+                  - cloudwatch:DescribeAnomalyDetectors
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricWidgetImage
+                  - cloudwatch:GetService
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt AlarmEvaluatorTable.Arn
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-alarm-evaluator-task
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: alarm-evaluator
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest
+          PortMappings:
+            - ContainerPort: 80
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: DYNAMODB_TABLE
+              Value: alarm-evaluator
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-alarm-evaluator
+      RetentionInDays: 30
+
+  # DynamoDB Table
+  AlarmEvaluatorTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alarm-evaluator
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-alarm-evaluator
+
+  # CodeBuild Resources
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+        - PolicyName: CodeBuildBasePolicy-alarm-evaluator
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*:*
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+              - Effect: Allow
+                Resource: '*'
+                Action:
+                  - ecs:DescribeTaskDefinition
+                  - ecs:RegisterTaskDefinition
+                  - ecs:ListTaskDefinitions
+              - Effect: Allow
+                Resource: 
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-alarm-evaluator-task-exec-role
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-alarm-evaluator-task-role
+                Action:
+                  - iam:PassRole
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: ECSCluster
+    Properties:
+      Name: !Sub ${EnvironmentName}-alarm-evaluator
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ECR_REPO_NAME
+            Value: !Ref ECRRepository
+          - Name: S3_BUCKET
+            Value: !Ref S3BucketName
+          - Name: S3_SOURCE_FILE
+            Value: !Ref S3SourceFile
+          - Name: TASK_DEFINITION_FAMILY
+            Value: !Sub ${EnvironmentName}-alarm-evaluator-task
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws s3 cp s3://${S3_BUCKET}/${S3_SOURCE_FILE} .
+                - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+                - REPOSITORY_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO_NAME}
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG=${COMMIT_HASH:=latest}
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image...
+                - |
+                  cat << EOF > Dockerfile
+                  FROM python:3.12-slim
+                  WORKDIR /app
+                  RUN apt-get update && \
+                      apt-get upgrade -y && \
+                      apt-get install -y --no-install-recommends gcc && \
+                      pip install --no-cache-dir boto3 && \
+                      apt-get clean && \
+                      rm -rf /var/lib/apt/lists/*
+                  COPY alarm_evaluator.py .
+                  CMD ["python", "alarm_evaluator.py"]
+                  EOF
+                - docker build -t $REPOSITORY_URI:latest .
+                - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+            post_build:
+                commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                - docker push $REPOSITORY_URI:latest
+                - docker push $REPOSITORY_URI:$IMAGE_TAG
+                - echo Updating ECS task definition...
+                - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition $TASK_DEFINITION_FAMILY --query 'taskDefinition' --output json)
+                - NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$REPOSITORY_URI:$IMAGE_TAG" '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
+                - echo "$NEW_TASK_DEFINITION" > task-definition.json
+                - aws ecs register-task-definition --cli-input-json "$(echo $NEW_TASK_DEFINITION)"
+                - echo "New task definition registered"
+      Cache:
+        Type: NO_CACHE
+
+  # Security Group for ECS Tasks
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress: []
+
+  # Lambda Function Role
+  CustomWidgetLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBScanAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                Resource: !GetAtt AlarmEvaluatorTable.Arn
+  
+  # Lambda Function for Custom Widget
+  CustomWidgetLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-customWidget-dynamoViewer
+      Handler: index.handler
+      Role: !GetAtt CustomWidgetLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from datetime import datetime
+
+          def handler(event, context):
+              # Initialize DynamoDB client
+              dynamodb = boto3.resource('dynamodb')
+              table = dynamodb.Table('alarm-evaluator')
+              
+              # Perform scan operation
+              response = table.scan()
+              items = response.get('Items', [])
+              
+              # Create HTML table
+              html = '''
+              <style>
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 8px; text-align: left; border: 1px solid #ddd; }
+                th { background-color: #f2f2f2; }
+                tr:nth-child(even) { background-color: #f9f9f9; }
+              </style>
+              <table>
+                <tr>
+                  <th>ID</th>
+                  <th>Timestamp</th>
+                  <th>Status</th>
+                </tr>
+              '''
+              
+              for item in items:
+                  html += f'''
+                  <tr>
+                    <td>{item.get('id', 'N/A')}</td>
+                    <td>{item.get('timestamp', 'N/A')}</td>
+                    <td>{item.get('status', 'N/A')}</td>
+                  </tr>
+                  '''
+              
+              html += '</table>'
+              
+              return html
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 128
+  
+  # CloudWatch Dashboard
+  AlarmEvaluatorDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub ${EnvironmentName}-alarm-evaluator-dashboard
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "custom",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "DynamoDB Records",
+                "endpoint": "${CustomWidgetLambda.Arn}",
+                "updateOn": {
+                  "refresh": true,
+                  "resize": true,
+                  "timeRange": false
+                }
+              }
+            }
+          ]
+        }
+  
+  # Scheduler Role
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ExecuteECSTask
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${EnvironmentName}-alarm-evaluator-task:*
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt ECSTaskRole.Arn
+                  - !GetAtt ECSTaskExecutionRole.Arn
+
+  # Task Schedule for alarm task
+  AlarmEvaluatorSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub ${EnvironmentName}-alarm-evaluator-schedule
+      Description: 'Run alarm evaluator task every Monday at 7am'
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      ScheduleExpression: 'cron(0 7 ? * MON *)'
+      Target:
+        Arn: !GetAtt ECSCluster.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${EnvironmentName}-alarm-evaluator-task
+          TaskCount: 1
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              Subnets: 
+                - !Ref PublicSubnet1
+                - !Ref PublicSubnet2
+              SecurityGroups:
+                - !Ref ECSSecurityGroup
+              AssignPublicIp: ENABLED
+      State: ENABLED
+
