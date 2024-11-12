@@ -1,4 +1,3 @@
-import datetime
 import json
 import logging
 import os
@@ -9,14 +8,21 @@ import boto3
 
 from botocore.paginate import Paginator
 from botocore.client import BaseClient
+from datetime import datetime, UTC
+
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
 
-os.environ["AWS_PROFILE"] = "andevelt+docker-Admins"
-os.environ["AWS_REGION"] = "eu-west-1"
+# os.environ["AWS_PROFILE"] = "andevelt+docker-Admins"
+# os.environ["AWS_REGION"] = "eu-west-1"
 
-cw_client = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
+# cw_client = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
+
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE")
+AWS_REGION = os.environ.get("AWS_REGION")
+
+cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
 
 
 def retrieve_all_cw_alarms(
@@ -249,16 +255,66 @@ def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
 #     return True
 
 
+# remove this, it is just so i can test env variable for table name
+def write_timestamp_to_dynamodb():
+    try:
+        # Create DynamoDB resource
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = dynamodb.Table(TABLE_NAME)
+
+        # Get current timestamp
+        current_time = datetime.now(UTC)
+        timestamp = int(current_time.timestamp())
+
+        # Create item to insert
+        item = {
+            "id": str(timestamp),
+            "timestamp": timestamp,
+            "datetime_utc": current_time.isoformat(),
+            "date": current_time.date().isoformat(),
+            "time": current_time.time().isoformat(),
+        }
+
+        # Write to DynamoDB
+        response = table.put_item(Item=item)
+
+        logger.info(
+            f"Successfully wrote timestamp to DynamoDB table {TABLE_NAME}"
+        )
+        logger.info(f"Item: {json.dumps(item, default=str)}")
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "message": "Successfully wrote timestamp to DynamoDB",
+                    "item": item,
+                },
+                default=str,
+            ),
+        }
+
+    except Exception as e:
+        error_msg = f"Error writing to DynamoDB: {str(e)}"
+        logger.error(error_msg)
+        return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
+
+
 if __name__ == "__main__":
-    cw_client = boto3.client(
-        "cloudwatch", region_name=os.environ["AWS_REGION"]
-    )
-    logging.info(os.environ["AWS_PROFILE"])
-    logging.info(os.environ["AWS_REGION"])
+    # cw_client = boto3.client(
+    #     "cloudwatch", region_name=os.environ["AWS_REGION"]
+    # )
+    # logging.info(os.environ["AWS_PROFILE"])
+    # logging.info(os.environ["AWS_REGION"])
+
+    cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", 20), format="%(message)s")
 
     metrics_alarm_list, composit_alarms_list = retrieve_all_cw_alarms(
         cw_client
     )
+
+    (write_timestamp_to_dynamodb())
 
     (
         metrics_alarms_without_description,
