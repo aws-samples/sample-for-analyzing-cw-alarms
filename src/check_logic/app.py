@@ -1,4 +1,3 @@
-import datetime
 import json
 import logging
 import os
@@ -10,6 +9,7 @@ import boto3
 from botocore.paginate import Paginator
 from botocore.client import BaseClient
 from datetime import datetime, UTC
+
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
