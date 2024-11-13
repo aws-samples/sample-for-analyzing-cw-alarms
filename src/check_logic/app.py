@@ -8,7 +8,7 @@ import boto3
 
 from botocore.paginate import Paginator
 from botocore.client import BaseClient
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 
 
 logger = logging.getLogger()
@@ -178,81 +178,103 @@ def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
     return response["AlarmHistoryItems"]
 
 
-# def check_alarm_history(alarm_history: dict) -> bool:
-#     """
-#     Checks the history of an alarm to determine if the alarm fails any criteria
+def get_alarm_start_time(
+    alarm: dict, state_type: str = "newState"
+) -> datetime:
+    """
+    Takes an alarm history item and returns the Start time for either the old
+    or new state
 
-#     Args:
-#         alarm (dict): A CloudWatch alarm dict object
+    Args:
+        alarm (dict[str, Any]): A CloudWatch alarm dict object
+        state_type (str, optional): The state type to retrieve. Allowed values
+                                    are newState or oldState.
+                                    Defaults to "newState".
 
-#     Returns:
-#         TODO: Fill out return value
-#     """
+    Returns:
+        datetime: The start time of the state
+    """
+    if state_type not in ["newState", "oldState"]:
+        raise ValueError("state_type must be either 'newState' or 'oldState'")
 
-#     for alarm in alarm_history:
-#         if alarm["HistoryItemType"] != "StateUpdate":
-#             continue  # We only care about Status Updates
+    alarm_hist = json.loads(alarm["HistoryData"])
+    alarm_start_time_string = alarm_hist[state_type]["stateReasonData"][
+        "startDate"
+    ]
+    last_alarm_start_time = datetime.strptime(
+        alarm_start_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
+    )
 
-#         if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
-#             # TODO: Check if alarm was triggered within the last 12 hours
+    return last_alarm_start_time
 
-#             last_alarm_hist = json.loads(alarm["HistoryData"])
-#             last_alarm_start_time_string = last_alarm_hist["newState"][
-#                 "stateReasonData"
-#             ]["startDate"]
-#             last_alarm_start_time = datetime.datetime.strptime(
-#                 last_alarm_start_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
-#             )
 
-#             alarm_hist = json.loads(alarm["HistoryData"])
-#             alarm_start_time_string = last_alarm_hist["newState"][
-#                 "stateReasonData"
-#             ]["startDate"]
+def check_alarm_history(alarm_history: dict) -> bool:
+    """
+    Checks the history of an alarm to determine if the alarm fails any criteria
 
-#             alarm_start_time = datetime.datetime.strptime(
-#                 alarm_start_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
-#             )
+    Args:
+        alarm (dict): A CloudWatch alarm dict object
 
-#             retrigger_time = alarm_start_time - last_alarm_start_time
-#             if retrigger_time < datetime.timedelta(hours=12):
-#                 recurring_alarm_count += 1
+    Returns:
+        TODO: Fill out return value
+    """
 
-#         elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
-#             # TODO: Check if alarm was triggered within the last 2 minutes
-#             if (
-#                 len(alarm_stack) == 0
-#             ):  # TODO: remove this when grabbing FULL history (catches case where pagination happens on active alarm)
-#                 continue
-#             alarm_trigger = alarm_stack.pop()
-#             alarm_hist = json.loads(alarm["HistoryData"])
-#             alarm_trigger_hist = json.loads(alarm_trigger["HistoryData"])
+    long_lived_alarm_count = 0
+    long_term_issue_count = 0
+    recurring_in_12_hours_count = 0
+    short_alarm_count = 0
 
-#             # Sanity check something hasn't been missed by comparing state changes
-#             if alarm_hist["newState"] != alarm_trigger_hist["oldState"]:
-#                 print(
-#                     "Error: Alarm cannot be triggered twice without being resolved."
-#                 )
-#                 break
+    for alarm in reversed(alarm_history):
+        if alarm["HistoryItemType"] != "StateUpdate":
+            print("Non Status Update data")
+            continue
 
-#             alarm_time_string = alarm_trigger_hist["newState"][
-#                 "stateReasonData"
-#             ]["startDate"]
-#             alarm_time = datetime.datetime.strptime(
-#                 alarm_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
-#             )
+        if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
+            alarm_start_time = get_alarm_start_time(
+                alarm, state_type="newState"
+            )
+            prev_alarm_close_time = get_alarm_start_time(
+                alarm, state_type="oldState"
+            )
+            time_between_close_and_trigger = (
+                alarm_start_time - prev_alarm_close_time
+            )
+            if time_between_close_and_trigger <= timedelta(hours=24):
+                long_term_issue_count += 1
+                print(
+                    f"Long Term Issue Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                )
+            if time_between_close_and_trigger <= timedelta(hours=12):
+                recurring_in_12_hours_count += 1
+                print(
+                    f"Recurring in 12 Hours Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                )
 
-#             ok_time_string = alarm_hist["newState"]["stateReasonData"][
-#                 "startDate"
-#             ]
-#             ok_time = datetime.datetime.strptime(
-#                 ok_time_string, "%Y-%m-%dT%H:%M:%S.%f%z"
-#             )
+        elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
+            alarm_close_time = get_alarm_start_time(
+                alarm, state_type="newState"
+            )
+            alarm_start_time = get_alarm_start_time(
+                alarm, state_type="oldState"
+            )
+            time_to_solve = alarm_close_time - alarm_start_time
+            if time_to_solve >= timedelta(hours=48):
+                long_lived_alarm_count += 1
+                print(
+                    f"Long Lived Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                )
+            elif time_to_solve <= timedelta(minutes=2):
+                short_alarm_count += 1
+                print(
+                    f"Short Term Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                )
 
-#             time_to_solve = ok_time - alarm_time
-#             if time_to_solve < datetime.timedelta(minutes=2):
-#                 short_alarm_count += 1
-
-#     return True
+    return {
+        "long_lived_alarm_count": long_lived_alarm_count,
+        "long_term_issue_count": long_term_issue_count,
+        "recurring_in_12_hours_count": recurring_in_12_hours_count,
+        "short_alarm_count": short_alarm_count,
+    }
 
 
 # remove this, it is just so i can test env variable for table name
