@@ -10,6 +10,7 @@ from botocore.paginate import Paginator
 from botocore.client import BaseClient
 from datetime import datetime, timedelta, UTC
 
+# TODO: Define data schema
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,11 @@ TABLE_NAME = os.environ.get("DYNAMODB_TABLE")
 AWS_REGION = os.environ.get("AWS_REGION")
 
 cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
+bedrock_runtime = boto3.client(
+    service_name="bedrock-runtime", region_name="us-west-2"
+)
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+basic_alarm_table = dynamodb.Table(TABLE_NAME)
 
 
 def retrieve_all_cw_alarms(
@@ -124,7 +130,7 @@ def alarm_data_points_too_high(alarm: dict[str, Any]) -> bool:
 
 def basic_alarm_checks(
     alarm_list: list[dict],
-) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+) -> dict:  # tuple[list[dict], list[dict], list[dict], list[dict]]:
     """
     Performs basic checks on a list of CloudWatch alarms
 
@@ -154,12 +160,12 @@ def basic_alarm_checks(
             alarms_with_too_high_data_points.append(alarm)
         if not alarm_has_actions(alarm):
             alarms_without_actions.append(alarm)
-    return (
-        alarms_without_description,
-        alarms_with_too_high_threshold,
-        alarms_with_too_high_data_points,
-        alarms_without_actions,
-    )  # TODO: decide if it is better to wrap these into a single dict
+    return {
+        "no_description": alarms_without_description,
+        "high_threshold": alarms_with_too_high_threshold,
+        "high_data_points": alarms_with_too_high_data_points,
+        "no actions": alarms_without_actions,
+    }
 
 
 def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
@@ -208,7 +214,7 @@ def get_alarm_start_time(
     return last_alarm_start_time
 
 
-def check_alarm_history(alarm_history: dict) -> bool:
+def check_alarm_history(alarm_history: dict) -> dict:
     """
     Checks the history of an alarm to determine if the alarm fails any criteria
 
@@ -242,12 +248,22 @@ def check_alarm_history(alarm_history: dict) -> bool:
             if time_between_close_and_trigger <= timedelta(hours=24):
                 long_term_issue_count += 1
                 print(
-                    f"Long Term Issue Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                    (
+                        f"Long Term Issue Alarm.\n"
+                        f"Prev Close: {prev_alarm_close_time}\n"
+                        f"New Trigger: {alarm_start_time}.\n"
+                        f"Time Delta: {time_between_close_and_trigger}"
+                    )
                 )
             if time_between_close_and_trigger <= timedelta(hours=12):
                 recurring_in_12_hours_count += 1
                 print(
-                    f"Recurring in 12 Hours Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                    (
+                        f"Recurring in 12 Hours Alarm.\n"
+                        f"Prev Close: {prev_alarm_close_time}\n"
+                        f"New Trigger: {alarm_start_time}.\n"
+                        f"Time Delta: {time_between_close_and_trigger}"
+                    )
                 )
 
         elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
@@ -261,12 +277,20 @@ def check_alarm_history(alarm_history: dict) -> bool:
             if time_to_solve >= timedelta(hours=48):
                 long_lived_alarm_count += 1
                 print(
-                    f"Long Lived Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                    (
+                        f"Long Lived Alarm.\nTrigger: {alarm_start_time}\n"
+                        f"Close: {alarm_close_time}.\n"
+                        f"Time Delta: {time_between_close_and_trigger}"
+                    )
                 )
             elif time_to_solve <= timedelta(minutes=2):
                 short_alarm_count += 1
                 print(
-                    f"Short Term Alarm.\nPrev Close: {prev_alarm_close_time}\nNew Trigger: {alarm_start_time}.\nTime Delta: {time_between_close_and_trigger}"
+                    (
+                        f"Short Lived Alarm.\nTrigger: {alarm_start_time}\n"
+                        f"Close: {alarm_close_time}.\n"
+                        f"Time Delta: {time_between_close_and_trigger}"
+                    )
                 )
 
     return {
@@ -277,33 +301,90 @@ def check_alarm_history(alarm_history: dict) -> bool:
     }
 
 
-# remove this, it is just so i can test env variable for table name
-def write_timestamp_to_dynamodb():
-    try:
-        # Create DynamoDB resource
-        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
-        table = dynamodb.Table(TABLE_NAME)
-
-        # Get current timestamp
-        current_time = datetime.now(UTC)
-        timestamp = int(current_time.timestamp())
-
-        # Create item to insert
-        item = {
-            "id": str(timestamp),
-            "timestamp": timestamp,
-            "datetime_utc": current_time.isoformat(),
-            "date": current_time.date().isoformat(),
-            "time": current_time.time().isoformat(),
+def generate_message(bedrock_runtime, model_id, system_prompt, messages):
+    body = json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "system": system_prompt,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 2000,
         }
+    )
 
-        # Write to DynamoDB
-        response = table.put_item(Item=item)
+    response = bedrock_runtime.invoke_model(body=body, modelId=model_id)
+    response_body = json.loads(response.get("body").read())
 
-        logger.info(
-            f"Successfully wrote timestamp to DynamoDB table {TABLE_NAME}"
-        )
-        logger.info(f"Item: {json.dumps(item, default=str)}")
+    return response_body
+
+
+def check_alarm_description(alarm: dict) -> dict:
+    """
+    Checks the description of an alarm and suggests improvements
+    Args:
+        alarm (dict): A CloudWatch alarm dict object
+    Returns:
+        TODO: Fill out return value
+    """
+
+    bedrock_runtime = boto3.client(
+        service_name="bedrock-runtime", region_name="us-west-2"
+    )
+
+    # model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+    model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    system_prompt = """
+    You are a helpful assistant that analyzes CloudWatch Alarm data.
+    You assess whether alarm descriptions are meaningful and representative of
+    the alarm.
+    You will be presented an Alarm description (in <desc>) tags
+    and a JSON object that describes the alarm (in <alarm> tags).
+    If the alarm description is not in the object, is None or is a blank
+    string, suggest a new description
+    Alarm descriptions should be descriptive, containing information on what
+    metric triggers the alarm as well as the threshold and
+    what actions are triggered.
+    Additionally, it is good practice to link a playbook (only 1 link should
+    be included).
+
+    After assessing the alarm, provide a suggested new alarm
+    description that incorporates your feedback.
+
+    When returning your output, be succinct in your assessment,
+    skip any preamble and wrap it into a JSON object like the following:
+    {
+        "assessment": <your assessment>,
+        "suggested_description": <your suggested description>
+    }
+    """  # TODO: Move the prompt out to somewhere else... S3?
+
+    u_msg = (
+        f" Evaluate if the description is meaningful and representative"
+        f"of the alarm then sugggest a new alarm if necessary.\n\n"
+        f"<desc>{alarm.get("AlarmDescription")}</desc>\n\n"
+        f"<alarm>{json.dumps(alarm, default=str)}</alarm>\n\n"
+    )
+
+    user_message = {"role": "user", "content": u_msg}
+    messages = [user_message]
+
+    response = generate_message(
+        bedrock_runtime, model_id, system_prompt, messages
+    )
+    logging.info(json.dumps(response, indent=4))
+
+    return response
+
+
+# remove this, it is just so i can test env variable for table name
+def write_basic_alarm_checks_to_dynamo(alarms_dict: dict):
+    try:
+        for key, value in alarms_dict.items():
+            item = {"id": key, "alarm_list": value}
+            basic_alarm_table.put_item(Item=item)
+
+            logging.info(f"Successfully wrote {key} to DynamoDB table")
+            logging.info(f"Item: {json.dumps(item, default=str)}")
 
         return {
             "statusCode": 200,
@@ -322,6 +403,10 @@ def write_timestamp_to_dynamodb():
         return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
 
 
+def write_alarm_description_to_dynamo():
+    return
+
+
 if __name__ == "__main__":
     # cw_client = boto3.client(
     #     "cloudwatch", region_name=os.environ["AWS_REGION"]
@@ -336,28 +421,27 @@ if __name__ == "__main__":
         cw_client
     )
 
-    (write_timestamp_to_dynamodb())
-
-    (
-        metrics_alarms_without_description,
-        metrics_alarms_with_too_high_threshold,
-        metrics_alarms_with_too_high_data_points,
-        metrics_alarms_without_actions,
-    ) = basic_alarm_checks(metrics_alarm_list)
+    basic_alarm_checks_dict = basic_alarm_checks(metrics_alarm_list)
 
     logging.info(
         f"""Number of Alarms Missing Descriptions:
-        {len(metrics_alarms_without_description)}"""
+        {len(basic_alarm_checks_dict['metrics_alarms_without_description'])}"""
     )
     logging.info(
         f"""Number of Alarms With High Thresholds:
-        {len(metrics_alarms_with_too_high_threshold)}"""
+        {len(basic_alarm_checks_dict['metrics_alarms_with_too_high_threshold'])}"""
     )
     logging.info(
         f"""Number of Alarms High Data Points:
-        {len(metrics_alarms_with_too_high_data_points)}"""
+        {len(basic_alarm_checks_dict['metrics_alarms_with_too_high_data_points'])}"""
     )
     logging.info(
         f"""Number of Alarms Without Actions:
-        {len(metrics_alarms_without_actions)}"""
+        {len(basic_alarm_checks_dict['metrics_alarms_without_actions'])}"""
     )
+
+    (write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict))
+
+    for alarm in metrics_alarm_list:
+        alarm_description_check = check_alarm_description(alarm)
+        logging.info(alarm_description_check)
