@@ -11,6 +11,10 @@ Parameters:
   S3SourceFile:
     Type: String
     Description: 'Path to source file in S3'
+  BedrockRegion:
+    Type: String
+    Description: Which region do you need to use for Bedrock
+    Default:  "us-west-1"
 
 Resources:
   # VPC and Network Resources
@@ -147,6 +151,11 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                 Resource: !GetAtt AlarmEvaluatorTable.Arn
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -175,6 +184,8 @@ Resources:
               Value: alarm-evaluator
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            - Name: AWS_BEDROCK_REGION
+              Value: !Ref BedrockRegion
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -232,7 +243,7 @@ Resources:
                   - ecs:RegisterTaskDefinition
                   - ecs:ListTaskDefinitions
               - Effect: Allow
-                Resource: 
+                Resource:
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-alarm-evaluator-task-exec-role
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-alarm-evaluator-task-role
                 Action:
@@ -340,7 +351,7 @@ Resources:
                 Action:
                   - dynamodb:Scan
                 Resource: !GetAtt AlarmEvaluatorTable.Arn
-  
+
   # Lambda Function for Custom Widget
   CustomWidgetLambda:
     Type: AWS::Lambda::Function
@@ -358,11 +369,11 @@ Resources:
               # Initialize DynamoDB client
               dynamodb = boto3.resource('dynamodb')
               table = dynamodb.Table('alarm-evaluator')
-              
+
               # Perform scan operation
               response = table.scan()
               items = response.get('Items', [])
-              
+
               # Create HTML table
               html = '''
               <style>
@@ -378,7 +389,7 @@ Resources:
                   <th>Status</th>
                 </tr>
               '''
-              
+
               for item in items:
                   html += f'''
                   <tr>
@@ -387,14 +398,14 @@ Resources:
                     <td>{item.get('status', 'N/A')}</td>
                   </tr>
                   '''
-              
+
               html += '</table>'
-              
+
               return html
       Runtime: python3.9
       Timeout: 30
       MemorySize: 128
-  
+
   # CloudWatch Dashboard
   AlarmEvaluatorDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -421,7 +432,7 @@ Resources:
             }
           ]
         }
-  
+
   # Scheduler Role
   SchedulerExecutionRole:
     Type: AWS::IAM::Role
@@ -467,7 +478,7 @@ Resources:
           LaunchType: FARGATE
           NetworkConfiguration:
             AwsvpcConfiguration:
-              Subnets: 
+              Subnets:
                 - !Ref PublicSubnet1
                 - !Ref PublicSubnet2
               SecurityGroups:
