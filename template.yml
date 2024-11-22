@@ -182,6 +182,8 @@ Resources:
           Environment:
             - Name: DYNAMODB_TABLE
               Value: alarm-evaluator
+            - Name: DYNAMODB_DESCRIPTION_TABLE
+              Value: alarm-description
             - Name: AWS_REGION
               Value: !Ref AWS::Region
             - Name: AWS_BEDROCK_REGION
@@ -208,6 +210,21 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-alarm-evaluator
+
+  AlarmDescriptionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: alarm-description
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-alarm-description
 
   # CodeBuild Resources
   CodeBuildServiceRole:

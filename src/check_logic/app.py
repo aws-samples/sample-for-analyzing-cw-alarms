@@ -14,23 +14,22 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
+print(os.getcwd())
 
-# os.environ["AWS_PROFILE"] = "andevelt+docker-Admins"
-# os.environ["AWS_REGION"] = "eu-west-1"
-
-# cw_client = boto3.client("cloudwatch", region_name=os.environ["AWS_REGION"])
-
-TABLE_NAME = os.environ.get("DYNAMODB_TABLE")
-AWS_REGION = os.environ.get("AWS_REGION")
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "alarm-evaluator")
+DESCRIPTION_TABLE_NAME = os.environ.get(
+    "DYNAMODB_DESCRIPTION_TABLE", "alarm-description"
+)
+AWS_REGION = os.environ.get("AWS_REGION", "eu-west-1")
 AWS_BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "us-west-2")
 
 cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
 bedrock_runtime = boto3.client(
-    service_name="bedrock-runtime",
-    region_name="us-west-2",  # TODO: Use Env Var
+    service_name="bedrock-runtime", region_name=AWS_BEDROCK_REGION
 )
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
 basic_alarm_table = dynamodb.Table(TABLE_NAME)
+alarm_description_table = dynamodb.Table(DESCRIPTION_TABLE_NAME)
 
 
 def retrieve_all_cw_alarms(
@@ -182,6 +181,7 @@ def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
             - The first list contains all Metric Alarms
             - The second list contains all Composite Alarms
     """
+    # TODO: Pagination?
     response = cw_client.describe_alarm_history(AlarmName=alarm["AlarmName"])
     return response["AlarmHistoryItems"]
 
@@ -224,7 +224,7 @@ def check_alarm_history(alarm_history: dict) -> dict:
         alarm (dict): A CloudWatch alarm dict object
 
     Returns:
-        TODO: Fill out return value
+        dict: The full response from Amazon Bedrock
     """
 
     long_lived_alarm_count = 0
@@ -234,7 +234,7 @@ def check_alarm_history(alarm_history: dict) -> dict:
 
     for alarm in reversed(alarm_history):
         if alarm["HistoryItemType"] != "StateUpdate":
-            print("Non Status Update data")
+            logging.info("Non Status Update data")
             continue
 
         if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
@@ -354,8 +354,10 @@ def check_alarm_description(
     Checks the description of an alarm and suggests improvements
     Args:
         alarm (dict): A CloudWatch alarm dict object
+        prefill (str, optional): String to prefill the LLM response with.
+                                 Defaults to None.
     Returns:
-        TODO: Fill out return value
+        dict: The full response from Amazon Bedrock
     """
 
     bedrock_runtime = boto3.client(
@@ -365,6 +367,7 @@ def check_alarm_description(
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
     # This model is better but we are rate limited internally
     # model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    # model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
     system_prompt = """
     You are a helpful assistant that analyzes CloudWatch Alarm data.
     You assess whether alarm descriptions are meaningful and representative of
@@ -388,10 +391,10 @@ def check_alarm_description(
         "assessment": <your assessment>,
         "suggested_description": <your suggested description>
     }
-    """  # TODO: Move the prompt out to somewhere else... S3?
+    """
 
     u_msg = (
-        f" Evaluate if the description is meaningful and representative"
+        f"Evaluate if the description is meaningful and representative"
         f"of the alarm then sugggest a new alarm if necessary.\n\n"
         f"<desc>{alarm.get("AlarmDescription")}</desc>\n\n"
         f"<alarm>{json.dumps(alarm, default=str)}</alarm>\n\n"
@@ -414,17 +417,18 @@ def check_alarm_description(
 
 def convert_invalid_types(alarm: dict) -> dict:
     """
-    Converts a datetime object to a string
+    Converts invalid types in a dict to valid Dynamo types
 
     Args:
-        dt (datetime): A datetime object
+        dict: A dict object of alarm details
 
     Returns:
-        str: The datetime object as a string
+        dict: The alarm dict with Dynamo compatible types
     """
 
-    logging.info(f"Converting datetime to string: {alarm.get("AlarmName")}")
+    logging.info(f"Converting invalid types: {alarm.get("AlarmName")}")
     for k, v in alarm.items():
+        logging.info(f"{k}:{v}")
         if isinstance(v, datetime):
             alarm[k] = v.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
         elif isinstance(v, float):
@@ -433,21 +437,22 @@ def convert_invalid_types(alarm: dict) -> dict:
     return alarm
 
 
-def write_basic_alarm_checks_to_dynamo(alarms_dict: dict):
+def write_basic_alarm_checks_to_dynamo(alarms_dict: dict) -> dict:
     """
     Writes the basic alarm checks to DynamoDB
 
-    TODO: args & returns
+    Args:
+        alarms_dict (dict): A dictionary containing the basic alarm checks
+    Returns:
+        dict: Status code dictionary
+
     """
 
-    logging.info(
-        f"Writing basic alarm checks to DynamoDB Table {TABLE_NAME} in {AWS_REGION}"
-    )
+    logging.info(f"Writing basic alarm checks to {TABLE_NAME} in {AWS_REGION}")
     try:
         for key, value in alarms_dict.items():
             for alarm in value:
                 alarm = convert_invalid_types(alarm)
-            # value = convert_datetime_to_string(value)
             item = {"id": key, "alarm_list": value}
             basic_alarm_table.put_item(Item=item)
 
@@ -471,8 +476,37 @@ def write_basic_alarm_checks_to_dynamo(alarms_dict: dict):
         return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
 
 
-def write_alarm_description_to_dynamo():
-    return
+def write_alarm_description_to_dynamo(alarm_map: dict):
+    logging.info(
+        f"Writing alarm descriptions to {DESCRIPTION_TABLE_NAME} in {AWS_REGION}"
+    )
+    try:
+        for alarm_id, alarm_attributes in alarm_map.items():
+            item = {"id": alarm_id}
+            convert_invalid_types(alarm_attributes)
+            for k, v in alarm_attributes.items():
+                item[k] = v
+            logging.info(f"\n\nItem: {json.dumps(item, default=str)}")
+            alarm_description_table.put_item(Item=item)
+
+            logging.info(f"Successfully wrote {alarm_id} to DynamoDB table")
+            logging.info(f"Item: {json.dumps(item, default=str)}")
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "message": "Successfully wrote timestamp to DynamoDB",
+                    "item": item,
+                },
+                default=str,
+            ),
+        }
+
+    except Exception as e:
+        error_msg = f"Error writing to DynamoDB: {str(e)}"
+        logger.error(error_msg)
+        return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
 
 
 def create_alarm_map(alarms_list: list[dict]) -> dict:
@@ -482,7 +516,10 @@ def create_alarm_map(alarms_list: list[dict]) -> dict:
     the alarm ARN and the value is the list of flags
     corresponding to checks carried out.
 
-    TODO: Args & return vals
+    Args:
+        alarms_list (list[dict]): A list of CW Alarms
+    Returns:
+        dict: A dictionary of CW Alarms with Arn as the key
 
     """
 
@@ -504,29 +541,30 @@ def create_alarm_map(alarms_list: list[dict]) -> dict:
 def create_alarm_with_flags(
     basic_alarm_checks_dict: dict, alarm_map: dict
 ) -> dict:
-    for check_type, alarms_list in basic_alarm_checks_dict:
+    """
+    Function that takes the basic alarm checks dictionary and an alarm map
+    and adds flags to the map to represent issues with each alarm
+
+    Args:
+        basic_alarm_checks_dict (dict): A dictionary of alarms and flags
+        alarm_map (dict): A dictionary of alarms with Arn as the key
+    Returns:
+        dict: A dictionary of alarms with Arn as the key and added flag values
+
+    """
+    logging.info("Adding flags to alarms")
+
+    for check_type, alarms_list in basic_alarm_checks_dict.items():
         if len(alarms_list) == 0:
             continue
         for alarm in alarms_list:
-            arn = alarm["AlarmARN"]
-            alarm_detail = alarm_map[
-                arn
-            ]  # TODO: Check if this is a pointer or copy
+            arn = alarm["AlarmArn"]
+            alarm_detail = alarm_map[arn]
             alarm_detail[check_type] = True
-            # alarm["AlarmARN"] = alarm_detail - not needed
     return alarm_map
 
 
 if __name__ == "__main__":
-    # cw_client = boto3.client(
-    #     "cloudwatch", region_name=os.environ["AWS_REGION"]
-    # )
-    # logging.info(os.environ["AWS_PROFILE"])
-    # logging.info(os.environ["AWS_REGION"])
-
-    cw_client = boto3.client("cloudwatch", region_name=AWS_REGION)
-    logging.basicConfig(level=os.getenv("LOG_LEVEL", 20), format="%(message)s")
-
     metrics_alarm_list, composit_alarms_list = retrieve_all_cw_alarms(
         cw_client
     )
@@ -552,17 +590,28 @@ if __name__ == "__main__":
         {len(basic_alarm_checks_dict['no_actions'])}"""
     )
 
-    write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
+    # write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
 
-    # alarm_map = create_alarm_with_flags(basic_alarm_checks_dict, alarm_map)
+    print("______________________________________________________________\n\n")
+    alarm_map = create_alarm_with_flags(basic_alarm_checks_dict, alarm_map)
+    print("______________________________________________________________\n\n")
+    print(json.dumps(alarm_map, indent=2))
 
     # Quotes need to be escaped here. Beware Ruff changes them.
     prefill = "{\"assessment\":"
-    # for alarm in metrics_alarm_list:
-    #     alarm_description_check = check_alarm_description(alarm, prefill)
-    #     llm_json_output = verify_llm_response(alarm_description_check, prefill)
-    #     # TODO: Take alarm object and appeend description from LLM
-    #     alarm_map[alarm["AlarmArn"]]["SuggestedDescription"] = (
-    #         llm_json_output.get("suggested_description")
-    #     )
-    #     logging.info(alarm_description_check)
+    for alarm in metrics_alarm_list:
+        alarm_description_check = check_alarm_description(alarm, prefill)
+        llm_json_output = verify_llm_response(alarm_description_check, prefill)
+        logging.info(f"LLM Output: {llm_json_output}")
+        # TODO: Take alarm object and appeend description from LLM
+        alarm_map[alarm["AlarmArn"]]["DescriptionAssessment"] = (
+            llm_json_output.get("assessment")
+        )
+        alarm_map[alarm["AlarmArn"]]["SuggestedDescription"] = (
+            llm_json_output.get("suggested_description")
+        )
+        logging.info(
+            f"Alarm Map: {json.dumps(alarm_map[alarm["AlarmArn"]], indent=2)}"
+        )
+    dynamo_response = write_alarm_description_to_dynamo(alarm_map)
+    logging.info(f"Dynamo Response: {dynamo_response}")
