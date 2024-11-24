@@ -153,6 +153,11 @@ Resources:
                 Resource: !GetAtt AlarmEvaluatorTable.Arn
               - Effect: Allow
                 Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt AlarmDescriptionTable.Arn
+              - Effect: Allow
+                Action:
                   - bedrock:InvokeModel
                 Resource: '*'
 
@@ -502,4 +507,3 @@ Resources:
                 - !Ref ECSSecurityGroup
               AssignPublicIp: ENABLED
       State: ENABLED
-
