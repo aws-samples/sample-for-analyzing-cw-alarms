@@ -181,7 +181,6 @@ def get_alarm_history(client: BaseClient, alarm: dict) -> list[dict]:
             - The first list contains all Metric Alarms
             - The second list contains all Composite Alarms
     """
-    # TODO: Pagination?
     response = cw_client.describe_alarm_history(AlarmName=alarm["AlarmName"])
     return response["AlarmHistoryItems"]
 
@@ -477,6 +476,16 @@ def write_basic_alarm_checks_to_dynamo(alarms_dict: dict) -> dict:
 
 
 def write_alarm_description_to_dynamo(alarm_map: dict):
+    """
+    Writes the alarm description suggestion and flags for
+    alarm checks to DynamoDB
+
+    Args:
+        alarm_map (dict): A dictionary containing the alarms and check results
+    Returns:
+        dict: Status code dictionary
+
+    """
     logging.info(
         f"Writing alarm descriptions to {DESCRIPTION_TABLE_NAME} in {AWS_REGION}"
     )
@@ -590,12 +599,7 @@ if __name__ == "__main__":
         {len(basic_alarm_checks_dict['no_actions'])}"""
     )
 
-    # write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
-
-    print("______________________________________________________________\n\n")
-    alarm_map = create_alarm_with_flags(basic_alarm_checks_dict, alarm_map)
-    print("______________________________________________________________\n\n")
-    print(json.dumps(alarm_map, indent=2))
+    write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
 
     # Quotes need to be escaped here. Beware Ruff changes them.
     prefill = "{\"assessment\":"
@@ -603,7 +607,6 @@ if __name__ == "__main__":
         alarm_description_check = check_alarm_description(alarm, prefill)
         llm_json_output = verify_llm_response(alarm_description_check, prefill)
         logging.info(f"LLM Output: {llm_json_output}")
-        # TODO: Take alarm object and appeend description from LLM
         alarm_map[alarm["AlarmArn"]]["DescriptionAssessment"] = (
             llm_json_output.get("assessment")
         )
