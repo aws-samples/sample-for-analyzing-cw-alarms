@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
-print(os.getcwd())
 
 TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "alarm-evaluator")
 DESCRIPTION_TABLE_NAME = os.environ.get(
@@ -215,9 +214,10 @@ def get_alarm_start_time(
     return last_alarm_start_time
 
 
-def check_alarm_history(alarm_history: dict) -> dict:
+def check_alarm_history(alarm_history: list) -> dict:
     """
-    Checks the history of an alarm to determine if the alarm fails any criteria
+    Checks the history of a single alarm to determine if the alarm fails any
+    criteria
 
     Args:
         alarm (dict): A CloudWatch alarm dict object
@@ -230,70 +230,44 @@ def check_alarm_history(alarm_history: dict) -> dict:
     long_term_issue_count = 0
     recurring_in_12_hours_count = 0
     short_alarm_count = 0
+    try:
+        for alarm in reversed(alarm_history):
+            if alarm["HistoryItemType"] != "StateUpdate":
+                logging.info("Non Status Update data")
+                continue
 
-    for alarm in reversed(alarm_history):
-        if alarm["HistoryItemType"] != "StateUpdate":
-            logging.info("Non Status Update data")
-            continue
+            if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
+                alarm_start_time = get_alarm_start_time(
+                    alarm, state_type="newState"
+                )
+                prev_alarm_close_time = get_alarm_start_time(
+                    alarm, state_type="oldState"
+                )
+                time_between_close_and_trigger = (
+                    alarm_start_time - prev_alarm_close_time
+                )
+                if time_between_close_and_trigger <= timedelta(hours=24):
+                    long_term_issue_count += 1
 
-        if alarm["HistorySummary"] == "Alarm updated from OK to ALARM":
-            alarm_start_time = get_alarm_start_time(
-                alarm, state_type="newState"
-            )
-            prev_alarm_close_time = get_alarm_start_time(
-                alarm, state_type="oldState"
-            )
-            time_between_close_and_trigger = (
-                alarm_start_time - prev_alarm_close_time
-            )
-            if time_between_close_and_trigger <= timedelta(hours=24):
-                long_term_issue_count += 1
-                print(
-                    (
-                        f"Long Term Issue Alarm.\n"
-                        f"Prev Close: {prev_alarm_close_time}\n"
-                        f"New Trigger: {alarm_start_time}.\n"
-                        f"Time Delta: {time_between_close_and_trigger}"
-                    )
-                )
-            if time_between_close_and_trigger <= timedelta(hours=12):
-                recurring_in_12_hours_count += 1
-                print(
-                    (
-                        f"Recurring in 12 Hours Alarm.\n"
-                        f"Prev Close: {prev_alarm_close_time}\n"
-                        f"New Trigger: {alarm_start_time}.\n"
-                        f"Time Delta: {time_between_close_and_trigger}"
-                    )
-                )
+                if time_between_close_and_trigger <= timedelta(hours=12):
+                    recurring_in_12_hours_count += 1
 
-        elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
-            alarm_close_time = get_alarm_start_time(
-                alarm, state_type="newState"
-            )
-            alarm_start_time = get_alarm_start_time(
-                alarm, state_type="oldState"
-            )
-            time_to_solve = alarm_close_time - alarm_start_time
-            if time_to_solve >= timedelta(hours=48):
-                long_lived_alarm_count += 1
-                print(
-                    (
-                        f"Long Lived Alarm.\nTrigger: {alarm_start_time}\n"
-                        f"Close: {alarm_close_time}.\n"
-                        f"Time Delta: {time_between_close_and_trigger}"
-                    )
+            elif alarm["HistorySummary"] == "Alarm updated from ALARM to OK":
+                alarm_close_time = get_alarm_start_time(
+                    alarm, state_type="newState"
                 )
-            elif time_to_solve <= timedelta(minutes=2):
-                short_alarm_count += 1
-                print(
-                    (
-                        f"Short Lived Alarm.\nTrigger: {alarm_start_time}\n"
-                        f"Close: {alarm_close_time}.\n"
-                        f"Time Delta: {time_between_close_and_trigger}"
-                    )
+                alarm_start_time = get_alarm_start_time(
+                    alarm, state_type="oldState"
                 )
-
+                time_to_solve = alarm_close_time - alarm_start_time
+                if time_to_solve >= timedelta(hours=48):
+                    long_lived_alarm_count += 1
+                elif time_to_solve <= timedelta(
+                    minutes=2
+                ) and time_to_solve > timedelta(seconds=0):
+                    short_alarm_count += 1
+    except KeyError as ke:
+        logging.error(ke)
     return {
         "long_lived_alarm_count": long_lived_alarm_count,
         "long_term_issue_count": long_term_issue_count,
@@ -487,7 +461,10 @@ def write_alarm_description_to_dynamo(alarm_map: dict):
 
     """
     logging.info(
-        f"Writing alarm descriptions to {DESCRIPTION_TABLE_NAME} in {AWS_REGION}"
+        f"""
+        Writing alarm descriptions to {DESCRIPTION_TABLE_NAME}
+        in {AWS_REGION}
+        """
     )
     try:
         for alarm_id, alarm_attributes in alarm_map.items():
@@ -578,9 +555,9 @@ if __name__ == "__main__":
         cw_client
     )
 
-    alarm_map = create_alarm_map(metrics_alarm_list)
+    alarm_map: dict = create_alarm_map(metrics_alarm_list)
 
-    basic_alarm_checks_dict = basic_alarm_checks(metrics_alarm_list)
+    basic_alarm_checks_dict: dict = basic_alarm_checks(metrics_alarm_list)
 
     logging.info(
         f"""Number of Alarms Missing Descriptions:
@@ -599,13 +576,21 @@ if __name__ == "__main__":
         {len(basic_alarm_checks_dict['no_actions'])}"""
     )
 
-    write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
-
     # Quotes need to be escaped here. Beware Ruff changes them.
     prefill = "{\"assessment\":"
     for alarm in metrics_alarm_list:
-        alarm_description_check = check_alarm_description(alarm, prefill)
-        llm_json_output = verify_llm_response(alarm_description_check, prefill)
+        alarm_hist = get_alarm_history(cw_client, alarm)
+        alarm_check_dict = check_alarm_history(alarm_hist)
+        for check_type, count in alarm_check_dict.items():
+            if not basic_alarm_checks_dict.get(check_type):
+                basic_alarm_checks_dict[check_type] = []
+            if count > 2:
+                basic_alarm_checks_dict[check_type].append(alarm)
+
+        alarm_description_check: dict = check_alarm_description(alarm, prefill)
+        llm_json_output: dict = verify_llm_response(
+            alarm_description_check, prefill
+        )
         logging.info(f"LLM Output: {llm_json_output}")
         alarm_map[alarm["AlarmArn"]]["DescriptionAssessment"] = (
             llm_json_output.get("assessment")
@@ -616,5 +601,6 @@ if __name__ == "__main__":
         logging.info(
             f"Alarm Map: {json.dumps(alarm_map[alarm["AlarmArn"]], indent=2)}"
         )
+
+    write_basic_alarm_checks_to_dynamo(basic_alarm_checks_dict)
     dynamo_response = write_alarm_description_to_dynamo(alarm_map)
-    logging.info(f"Dynamo Response: {dynamo_response}")
