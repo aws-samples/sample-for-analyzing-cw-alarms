@@ -36,3 +36,11 @@ To deploy the alarm analyzer, please follow these steps:
 
 ## Cleanup
 1. If you no longer require the analyzer, delete the CloudFormation stack making sure that you 1st empty the ECR repositry named `{EnvironmentName}-alarm-evaluator-repo` by deleteing all images contained in the registry.
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
+## License
+
+This library is licensed under the MIT-0 License. See the LICENSE file.
