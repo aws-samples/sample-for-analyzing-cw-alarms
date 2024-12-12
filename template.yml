@@ -11,6 +11,7 @@ Parameters:
   S3SourceFile:
     Type: String
     Description: 'Path to source file in S3'
+    Default: "alarm_evaluator.py"
   BedrockRegion:
     Type: String
     Description: Which region do you need to use for Bedrock
@@ -378,7 +379,7 @@ Resources:
   CustomWidgetLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub ${EnvironmentName}-customWidget-dynamoViewer
+      FunctionName: !Sub ${EnvironmentName}-customWidget-report
       Handler: index.handler
       Role: !GetAtt CustomWidgetLambdaRole.Arn
       Code:
@@ -388,15 +389,13 @@ Resources:
           from datetime import datetime
 
           def handler(event, context):
-              # Initialize DynamoDB client
+              
               dynamodb = boto3.resource('dynamodb')
               table = dynamodb.Table('alarm-evaluator')
 
-              # Perform scan operation
               response = table.scan()
               items = response.get('Items', [])
 
-              # Create HTML table
               html = '''
               <style>
                 table { width: 100%; border-collapse: collapse; }
@@ -406,29 +405,118 @@ Resources:
               </style>
               <table>
                 <tr>
-                  <th>ID</th>
-                  <th>Timestamp</th>
-                  <th>Status</th>
+                  <th>Alarm Issue</th>
+                  <th>Number of alarms</th>
+                  <th>Alarm Names</th>
                 </tr>
               '''
-
+              alarm_issue={"no_description":"Alarms with no description",
+                            "no_actions":"Alarms with no actions",
+                            "long_lived_alarm_count":"Long sounding alarms",
+                            "high_data_points":"Alarm set for too many data points",
+                            "recurring_in_12_hours_count":"Alarms re-alerting within 12hrs",
+                            "long_term_issue_count":"Alarms that occur daily",
+                            "short_alarm_count":"Alarms closing within 2mins",
+                            "high_threshold":"Alarm threshold set too high"}
               for item in items:
+                  alarm_names=""
+                  for alarm in item.get('alarm_list'):
+                      #alarm_names.append(alarm.get('AlarmName'))
+                      alarm_names+=(alarm.get('AlarmName')+", ")
                   html += f'''
                   <tr>
-                    <td>{item.get('id', 'N/A')}</td>
-                    <td>{item.get('timestamp', 'N/A')}</td>
-                    <td>{item.get('status', 'N/A')}</td>
+                    <td>{alarm_issue.get(item.get('id', 'N/A'))}</td>
+                    <td>{len(item['alarm_list'])}</td>
+                    <td>{alarm_names}</td>
                   </tr>
                   '''
-
               html += '</table>'
 
               return html
-      Runtime: python3.9
+      Runtime: python3.12
       Timeout: 30
       MemorySize: 128
 
-  # CloudWatch Dashboard
+  AlarmDescriptionsWidgetLambda:
+    Type: AWS::Lambda::Function
+    
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-customWidget-alarmDescriptions
+      Handler: index.handler
+      Role: !GetAtt AlarmDescriptionsWidgetLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from datetime import datetime
+
+          def handler(event, context):
+              
+              dynamodb = boto3.resource('dynamodb')
+              table = dynamodb.Table('alarm-description')
+
+              response = table.scan()
+              items = response.get('Items', [])
+
+              html = '''
+              <style>
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 8px; text-align: left; border: 1px solid #ddd; }
+                th { background-color: #f2f2f2; }
+                tr:nth-child(even) { background-color: #f9f9f9; }
+              </style>
+              <table>
+                <tr>
+                  <th>Alarm Name</th>
+                  <th>Current Description</th>
+                  <th>Suggested Description</th>
+                </tr>
+              '''
+              for item in items:
+                  alarm_name=item.get('AlarmName')
+                  encoded_alarm_name = alarm_name.replace("/", "$2F")
+                  alarm_url=f"https://console.aws.amazon.com/cloudwatch/home#alarmsV2:alarm/{encoded_alarm_name}"
+                  html += f'''
+                  <tr>
+                    <td><a href={alarm_url}>{alarm_name}</a>'</td>
+                    <td>{item.get('AlarmDescription')}</td>
+                    <td>{item.get('SuggestedDescription')}</td>
+                  </tr>
+                  '''
+              html += '</table>'
+
+              return html
+
+
+      Runtime: python3.12
+      Timeout: 30
+      MemorySize: 128
+
+  AlarmDescriptionsWidgetLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:GetItem
+                Resource: !GetAtt AlarmDescriptionTable.Arn
+
+
   AlarmEvaluatorDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -440,10 +528,10 @@ Resources:
               "type": "custom",
               "x": 0,
               "y": 0,
-              "width": 12,
-              "height": 6,
+              "width": 18,
+              "height": 10,
               "properties": {
-                "title": "DynamoDB Records",
+                "title": "Alarm Evaluation Report",
                 "endpoint": "${CustomWidgetLambda.Arn}",
                 "updateOn": {
                   "refresh": true,
@@ -451,9 +539,39 @@ Resources:
                   "timeRange": false
                 }
               }
+            },
+            {
+              "type": "custom",
+              "x": 0,
+              "y": 6,
+              "width": 18,
+              "height": 10,
+              "properties": {
+                "title": "Suggested Alarm Descriptions",
+                "endpoint": "${AlarmDescriptionsWidgetLambda.Arn}",
+                "updateOn": {
+                  "refresh": true,
+                  "resize": true,
+                  "timeRange": false
+                },
+                "parameters": {
+                  "parameterType": "alarmSelector"
+                }
+              }
+            },
+            {
+              "type": "text",
+              "x": 18,
+              "y": 0,
+              "width": 6,
+              "height": 14,
+              "properties": {
+                  "markdown": "# Explanation\n## What do the alarm issues mean?\n \nAlarm Issue | Explanation\n----|----- \nAlarms with no description | Alarms should have a meaninful description and a link to playbook/runbook.\nAlarms with no actions | Alarms with no actions configure - unless they are a part of a composite alerts, why have an alarm if you intend to take no action?  These are costly and likely pointless. \nLong sounding alarms | Consider why these alarms sound for long periods of time and do not close.  Are these genuinely long standing issues or just noisy alarms being ignored?\nAlarm set for too many data points | Alarms requiring review of thresholds as they have a high number of data points to hit before they alert.\nAlarms re-alerting within 12hrs | Alarms which alert several times in a month or week and repeat.  This may indicate that there is a long term fix is required.  \nAlarms that occur daily | Noisy alarms which imply that the issue is either not fixed long term or alarm is being ignored.\nAlarms closing within 2mins | Alarms which are alerting and then quickly closing themselves within a short space of time.  \nAlarm threshold set too high | The alarm treshold may be set too high and never sound.  Please review to make sure alarm is effective.\n\n\n"
+              }
             }
           ]
         }
+    
 
   # Scheduler Role
   SchedulerExecutionRole:
