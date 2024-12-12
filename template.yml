@@ -389,7 +389,7 @@ Resources:
           from datetime import datetime
 
           def handler(event, context):
-              
+
               dynamodb = boto3.resource('dynamodb')
               table = dynamodb.Table('alarm-evaluator')
 
@@ -421,13 +421,15 @@ Resources:
               for item in items:
                   alarm_names=""
                   for alarm in item.get('alarm_list'):
-                      #alarm_names.append(alarm.get('AlarmName'))
-                      alarm_names+=(alarm.get('AlarmName')+", ")
+                      alarm_name = alarm.get('AlarmName')
+                      encoded_alarm_name = alarm_name.replace("/", "$2F")
+                      alarm_url=f"https://console.aws.amazon.com/cloudwatch/home#alarmsV2:alarm/{encoded_alarm_name}"
+                      alarm_names+= f"<a href={alarm_url}>{alarm_name}</a> | "
                   html += f'''
                   <tr>
                     <td>{alarm_issue.get(item.get('id', 'N/A'))}</td>
                     <td>{len(item['alarm_list'])}</td>
-                    <td>{alarm_names}</td>
+                    <td>{alarm_names[:-2]}</td>
                   </tr>
                   '''
               html += '</table>'
@@ -439,7 +441,7 @@ Resources:
 
   AlarmDescriptionsWidgetLambda:
     Type: AWS::Lambda::Function
-    
+
     Properties:
       FunctionName: !Sub ${EnvironmentName}-customWidget-alarmDescriptions
       Handler: index.handler
@@ -451,7 +453,7 @@ Resources:
           from datetime import datetime
 
           def handler(event, context):
-              
+
               dynamodb = boto3.resource('dynamodb')
               table = dynamodb.Table('alarm-description')
 
@@ -478,7 +480,7 @@ Resources:
                   alarm_url=f"https://console.aws.amazon.com/cloudwatch/home#alarmsV2:alarm/{encoded_alarm_name}"
                   html += f'''
                   <tr>
-                    <td><a href={alarm_url}>{alarm_name}</a>'</td>
+                    <td><a href={alarm_url}>{alarm_name}</a></td>
                     <td>{item.get('AlarmDescription')}</td>
                     <td>{item.get('SuggestedDescription')}</td>
                   </tr>
@@ -571,7 +573,7 @@ Resources:
             }
           ]
         }
-    
+
 
   # Scheduler Role
   SchedulerExecutionRole:
