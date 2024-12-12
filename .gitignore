@@ -1,4 +1,5 @@
 .venv/*
 .mypy_cache/*
 .vscode/*
+notebooks/*
 ruff.toml
