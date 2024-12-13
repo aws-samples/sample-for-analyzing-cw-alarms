@@ -17,7 +17,7 @@ This alarm analyser will examine all of your Amazon CloudWatch Alarms in a speci
 ## Deployment
 To deploy the alarm analyser, please follow these steps:
 1. Navigate to Amazon Bedrock on the AWS Console and then to **Model Access**. Select **Enable specific models** or **Modify model access** and enable access to `Claude 3 Sonnet`. (please note that it has to be this model and not the later one)
-1. Navigate to the Amazon S3 consoe and identify an Amazon S3 bucket of your choice in the account and region to which you wish to deploy the analyser or [create a new bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html). [Upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html) `.src/alarm_evaluator.py` to this bucket. Only copy the file and not the src folder.
+1. Navigate to the Amazon S3 console and identify an Amazon S3 bucket of your choice in the account and region to which you wish to deploy the analyser or [create a new bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html). [Upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html) `.src/alarm_evaluator.py` to this bucket. Only copy the file and not the src folder.
 1. In the same region, navigate to the CloudFormation console, deploy `template.yml` making sure you specify the parameters as follows:
 
     | Parameter | Default Value | Description |
