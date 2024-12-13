@@ -158,8 +158,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: '*'
-
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -349,6 +348,7 @@ Resources:
           FromPort: -1
           ToPort: -1
           CidrIp: 0.0.0.0/0
+          Description: "Need an open group to communicate with Bedrock and Cloudwatch without an interface endpoint"
 
   CustomWidgetLambdaRole:
     Type: AWS::IAM::Role
