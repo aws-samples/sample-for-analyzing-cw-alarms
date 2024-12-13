@@ -3,3 +3,4 @@
 .vscode/*
 notebooks/*
 ruff.toml
+.DS_Store
