@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Resources required for the CludWatch alarm evaluator'
+Description: 'Resources required for the CloudWatch alarm analyser'
 
 Parameters:
   EnvironmentName:
@@ -15,10 +15,10 @@ Parameters:
   BedrockRegion:
     Type: String
     Description: Which region do you need to use for Bedrock
-    Default:  "us-west-1"
+    Default:  "us-west-2"
 
 Resources:
-  # VPC and Network Resources
+
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -44,7 +44,7 @@ Resources:
       VpcId: !Ref VPC
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-PublicSubnet1
@@ -55,7 +55,7 @@ Resources:
       VpcId: !Ref VPC
       CidrBlock: 10.0.2.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-PublicSubnet2
@@ -88,7 +88,6 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
-  # ECR Repository
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -96,7 +95,6 @@ Resources:
       ImageScanningConfiguration:
         ScanOnPush: true
 
-  # ECS Cluster and Related Resources
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -201,7 +199,6 @@ Resources:
       LogGroupName: !Sub /ecs/${EnvironmentName}-alarm-evaluator
       RetentionInDays: 30
 
-  # DynamoDB Table
   AlarmEvaluatorTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -232,7 +229,6 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-alarm-description
 
-  # CodeBuild Resources
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -344,7 +340,6 @@ Resources:
       Cache:
         Type: NO_CACHE
 
-  # Security Group for ECS Tasks
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -357,7 +352,6 @@ Resources:
           ToPort: -1
           CidrIp: 0.0.0.0/0
 
-  # Lambda Function Role
   CustomWidgetLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -380,7 +374,6 @@ Resources:
                   - dynamodb:Scan
                 Resource: !GetAtt AlarmEvaluatorTable.Arn
 
-  # Lambda Function for Custom Widget
   CustomWidgetLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -523,7 +516,6 @@ Resources:
                   - dynamodb:GetItem
                 Resource: !GetAtt AlarmDescriptionTable.Arn
 
-
   AlarmEvaluatorDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -579,8 +571,6 @@ Resources:
           ]
         }
 
-
-  # Scheduler Role
   SchedulerExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -607,7 +597,6 @@ Resources:
                   - !GetAtt ECSTaskRole.Arn
                   - !GetAtt ECSTaskExecutionRole.Arn
 
-  # Task Schedule for alarm task
   AlarmEvaluatorSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:

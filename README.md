@@ -1,6 +1,6 @@
 # CloudWatch Alarm Analyser
 
-This alarm analyzer will examine all of your Amazon CloudWatch Alarms in a specific region and identify common alarm issues as well as providing Bedrock (GenAI) generated alarm descriptions for each of your alarms in order to make them more meaningful. Results are displayed in CloudWatch Dashboards custom widgets. Alarm issues are defined as follows:
+This alarm analyser will examine all of your Amazon CloudWatch Alarms in a specific region and identify common alarm issues as well as providing Bedrock (GenAI) generated alarm descriptions for each of your alarms in order to make them more meaningful. Results are displayed in CloudWatch Dashboards custom widgets. Alarm issues are defined as follows:
 
 | Issue | Description |
 |:---|:---|
@@ -15,9 +15,9 @@ This alarm analyzer will examine all of your Amazon CloudWatch Alarms in a speci
 
 
 ## Deployment
-To deploy the alarm analyzer, please follow these steps:
+To deploy the alarm analyser, please follow these steps:
 1. Navigate to Amazon Bedrock on the AWS Console and then to **Model Access**. Select **Enable specific models** or **Modify model access** and enable access to `Claude 3 Sonnet`. (please note that it has to be this model and not the later one)
-1. Identify an Amazon S3 bucket of your choice in the account and region to which you wish to deply the analyzer. Copy `.src/alarm_evaluator.py` to this bucket. Only copy the file and not the src folder.
+1. Navigate to the Amazon S3 consoe and identify an Amazon S3 bucket of your choice in the account and region to which you wish to deploy the analyser or [create a new bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html). [Upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html) `.src/alarm_evaluator.py` to this bucket. Only copy the file and not the src folder.
 1. In the same region, navigate to the CloudFormation console, deploy `template.yml` making sure you specify the parameters as follows:
 
     | Parameter | Default Value | Description |
@@ -30,12 +30,12 @@ To deploy the alarm analyzer, please follow these steps:
 1. Wait for deployment to complete.
 
 1. Navigate to the AWS CodeBuild console and identify a job named `{EnvironmentName}-alarm-evaluator`. Select the job and click **Start Build**. Observe the job until it has completed making sure it has no errors.
-1. Your alarm analyzer is now ready and scheduled to run every Monday. Once the scheduled task completes, examine the `{EnvironmentName}-alarm-evaluator-dashboard` in The CloudWatch Dashboard console to view your report. Please make sure you select **Allow always** to allow the custom widget Lambdas to populate your dashbaord.
-1. Optional - If you wish to test, head to the Amazon ECS console, locate the `{EnvironmentName}-alarm-evaluator-cluster`, head to **Tasks** and **Run new task**. Leave compute configuration as defeault (Launch type, Fargate, latest). Under **Deployment configuration** select **Task** and under **Family**, select `{EnvironmentName}-alarm-evaluator-task` then select the latest revision listed under revisions. Make sure desired tasks is set to `1` and under **Networking** chose the new VPC which was created in the CloudFormation template. Leave the rest as default then click **Create**. Wait for the task to complete. Examine the `{EnvironmentName}-alarm-evaluator-dashboard` in The CloudWatch Dashboard console to view your report.
+1. Your alarm analyser is now ready and scheduled to run every Monday. Once the scheduled task completes, examine the `{EnvironmentName}-alarm-evaluator-dashboard` in The CloudWatch Dashboard console to view your report. Please make sure you select **Allow always** to allow the custom widget Lambdas to populate your dashbaord.
+1. Optional - If you wish to run your analysis immediately instead of waiting for the scheduled task to run, navigate to the Amazon ECS console, locate the `{EnvironmentName}-alarm-evaluator-cluster`, head to **Tasks** and **Run new task**. Leave compute configuration as default (Launch type, Fargate, latest). Under **Deployment configuration** select **Task** and under **Family**, select `{EnvironmentName}-alarm-evaluator-task` then select the latest revision listed under **Revisions**. Make sure desired tasks is set to `1` and under **Networking** chose the new VPC which was created in the CloudFormation template. Leave the rest as default then click **Create**. Wait for the task to complete. Examine the `{EnvironmentName}-alarm-evaluator-dashboard` in The CloudWatch Dashboard console to view your report.
 1. In your report, you can review the list of alarms with specific issues as well as the list of suggested descriptions. Each alarm is hyperlinked so that you can easily open the alarm in order to edit if you wish to do so.
 
 ## Cleanup
-1. If you no longer require the analyzer, delete the CloudFormation stack making sure that you 1st empty the ECR repositry named `{EnvironmentName}-alarm-evaluator-repo` by deleteing all images contained in the registry.
+1. If you no longer require the analyser, delete the CloudFormation stack making sure that you 1st empty the ECR repositry named `{EnvironmentName}-alarm-evaluator-repo` by deleteing all images contained in the registry.
 
 ## Security
 
