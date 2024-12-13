@@ -351,6 +351,11 @@ Resources:
       GroupDescription: Security group for ECS tasks
       VpcId: !Ref VPC
       SecurityGroupIngress: []
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
 
   # Lambda Function Role
   CustomWidgetLambdaRole:
