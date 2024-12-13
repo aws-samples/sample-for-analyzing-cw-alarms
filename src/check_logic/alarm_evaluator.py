@@ -19,7 +19,7 @@ TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "alarm-evaluator")
 DESCRIPTION_TABLE_NAME = os.environ.get(
     "DYNAMODB_DESCRIPTION_TABLE", "alarm-description"
 )
-AWS_REGION = os.environ.get("AWS_REGION", "eu-west-1")
+AWS_REGION = os.environ.get("AWS_REGION")
 # Seperate region to use a Region where Bedrock has access to Claude 3 Sonnet
 AWS_BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "us-west-2")
 
