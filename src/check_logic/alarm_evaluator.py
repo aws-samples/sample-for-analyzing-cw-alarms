@@ -578,7 +578,7 @@ if __name__ == "__main__":
     )
 
     # Quotes need to be escaped here. Beware Ruff changes them.
-    prefill = '{"assessment":'
+    prefill = "{\"assessment\":"
     for alarm in metrics_alarm_list:
         alarm_hist = get_alarm_history(cw_client, alarm)
         alarm_check_dict = check_alarm_history(alarm_hist)
