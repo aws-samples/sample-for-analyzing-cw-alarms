@@ -5,13 +5,6 @@ Parameters:
   EnvironmentName:
     Type: String
     Default: 'dev'
-  S3BucketName:
-    Type: String
-    Description: 'S3 bucket containing source code'
-  S3SourceFile:
-    Type: String
-    Description: 'Path to source file in S3'
-    Default: "alarm_evaluator.py"
   BedrockRegion:
     Type: String
     Description: Which region do you need to use for Bedrock
@@ -158,7 +151,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
+                Resource: !Sub arn:aws:bedrock:${BedrockRegion}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -285,10 +278,6 @@ Resources:
             Value: !Ref AWS::AccountId
           - Name: ECR_REPO_NAME
             Value: !Ref ECRRepository
-          - Name: S3_BUCKET
-            Value: !Ref S3BucketName
-          - Name: S3_SOURCE_FILE
-            Value: !Ref S3SourceFile
           - Name: TASK_DEFINITION_FAMILY
             Value: !Sub ${EnvironmentName}-alarm-evaluator-task
       Source:
@@ -298,7 +287,8 @@ Resources:
           phases:
             pre_build:
               commands:
-                - aws s3 cp s3://${S3_BUCKET}/${S3_SOURCE_FILE} .
+                - git clone https://github.com/aws-samples/sample-for-analyzing-cw-alarms.git
+                - cp sample-for-analyzing-cw-alarms/src/check_logic/alarm_evaluator.py .
                 - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
                 - REPOSITORY_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO_NAME}
                 - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
