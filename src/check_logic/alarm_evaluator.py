@@ -335,7 +335,7 @@ def check_alarm_description(
     """
 
     bedrock_runtime = boto3.client(
-        service_name="bedrock-runtime", region_name="us-west-2"
+        service_name="bedrock-runtime", region_name=AWS_BEDROCK_REGION
     )
 
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
