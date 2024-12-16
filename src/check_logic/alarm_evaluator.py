@@ -335,7 +335,7 @@ def check_alarm_description(
     """
 
     bedrock_runtime = boto3.client(
-        service_name="bedrock-runtime", region_name="us-west-2"
+        service_name="bedrock-runtime", region_name=AWS_BEDROCK_REGION
     )
 
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -578,7 +578,7 @@ if __name__ == "__main__":
     )
 
     # Quotes need to be escaped here. Beware Ruff changes them.
-    prefill = "{\"assessment\":"
+    prefill = '{"assessment":'
     for alarm in metrics_alarm_list:
         alarm_hist = get_alarm_history(cw_client, alarm)
         alarm_check_dict = check_alarm_history(alarm_hist)
