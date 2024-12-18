@@ -21,10 +21,8 @@ To deploy the alarm analyser, please follow these steps:
 
     | Parameter | Default Value | Description |
     |:---|:---|:---|
-    | `BedrockRegion` | us-west-1 | Specify the region in which you have enabled the model |
+    | `BedrockRegion` | us-west-2 | Specify the region in which you have enabled the model |
     | `EnvironmentName` | dev | Specify a name of your choice |
-    | `S3BucketName` | N/A | Specify the bucket to which you copied the file |
-    | `S3SourceFile` | `alarm_evaluator.py` | Leave the file name as default but add full path if you copied the file to a folder within a bucket |
 1. Wait for deployment to complete.
 1. Navigate to the AWS CodeBuild console and identify a job named `{EnvironmentName}-alarm-evaluator`. Select the job and click **Start Build**. Observe the job until it has completed making sure it has no errors.
 1. Your alarm analyser is now ready and scheduled to run every Monday. Once the scheduled task completes, examine the `{EnvironmentName}-alarm-evaluator-dashboard` in The CloudWatch Dashboard console to view your report. Please make sure you select **Allow always** to allow the custom widget Lambdas to populate your dashbaord.
