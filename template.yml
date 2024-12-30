@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Resources required for the CloudWatch alarm analyser'
+Description: 'Resources required for the CloudWatch alarm analyser (uksb-91q89p1o1s)'
 
 Parameters:
   EnvironmentName:
